@@ -1,0 +1,12 @@
+node_modules/
+.data/
+test-results/
+playwright-report/
+.idea/workspace.xml
+.idea/shelf/
+# Playwright CLI output (may contain credentials)
+.playwright-cli/
+
+# IDE
+.idea/
+.DS_Store

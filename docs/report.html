@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Senior QA take-home — Maryia Dolia</title>
+<style>
+  @page { size: A4; margin: 11mm 12mm; }
+  * { box-sizing: border-box; }
+  body { font: 8.4pt/1.32 "Helvetica Neue", Arial, sans-serif; color: #1a1a1a; margin: 0; }
+  h1 { font-size: 13pt; margin: 0 0 1mm; }
+  h2 { font-size: 9.6pt; margin: 2.6mm 0 1mm; padding-bottom: .4mm; border-bottom: 1px solid #1f3b70; color: #1f3b70; }
+  p { margin: 0 0 1.2mm; }
+  .sub { color: #555; margin-bottom: 1.5mm; }
+  table { width: 100%; border-collapse: collapse; margin: .6mm 0 1.2mm; }
+  th, td { border: 1px solid #c8c8c8; padding: .7mm 1.2mm; vertical-align: top; text-align: left; }
+  th { background: #eef2f8; font-weight: 600; }
+  code, .mono { font: 7.6pt/1.3 Menlo, Consolas, monospace; }
+  ul, ol { margin: 0 0 1.2mm; padding-left: 4.2mm; }
+  li { margin: 0; }
+  mark { background: #fff1a8; padding: 0 .5mm; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; }
+  .k { font-weight: 600; }
+  .page-break { break-before: page; }
+</style>
+</head>
+<body>
+
+<h1>Optional form section: dependent data not cleaned up on edit</h1>
+<p class="sub">Maryia Dolia · Senior QA take-home · Product A (B2B SaaS for professional &amp; financial-services firms), <b>mobile app</b> · <b>Nov 2023 – May 2024</b> · test &amp; pre-prod environments</p>
+
+<h2>1. What happened</h2>
+<p><span class="k">Role:</span> <b>Lead QA Automation Engineer (Mobile)</b> on Product A: led mobile test automation, built the framework from scratch with Appium and WebdriverIO for iOS and Android, mentored 2 automation engineers.
+<span class="k">Stack:</span> <b>React Native</b> client (iOS and Android), REST backend, relational DB plus a <b>separate image storage service</b>; QA: TypeScript, Appium, WebdriverIO, Jest, Jenkins, Fastlane, Allure, AWS.</p>
+<p><span class="k">Feature:</span> a form with base fields and an <b>“Add additional details”</b> checkbox that reveals an extra section with its own fields and images. The spec described create and display but said nothing about what happens to the section’s data when it is switched off later.</p>
+<p><span class="k">Trigger:</span> while testing <b>edit</b> scenarios I created a form with the section and images, edited it, unticked the box and saved. The UI looked correct (section hidden, “Saved”), but I took the section image URLs from the app’s traffic (proxy) and opened them directly: they were still served. They stayed in storage, and the user could still reach them. That is <b>BUG-001</b>. On the test environment I also found <b>BUG-002</b>: a user ticks the box, types into the section, unticks it and saves. The hidden values were still sent, so the user got a validation error on a field they could not see and had no way to understand it.</p>
+<p><span class="k">Why it escaped earlier checks:</span> nothing was visible at UI level, and mobile regression checked only what the screens showed. The DB did not cascade into a separate storage service, and with no acceptance criterion for “switching off” nobody tested it.</p>
+<p><span class="k">What I did:</span> reproduced both bugs through the proxy log and the API, and logged them with evidence. I raised the spec gap with the PO, which produced a new criterion: <i>disabling the section deletes its fields and images on save; cancel keeps them</i>. I added API checks and the edit/cancel UI cases to regression.
+<span class="k">Outcome:</span> both fixed <b>before production</b> (caught on test/pre-prod, no customer exposure). The new acceptance criterion became part of the story, and the API checks and edit/cancel cases stayed in regression.</p>
+
+<h2>2. What I would ship today: layering &amp; scope</h2>
+<table>
+  <tr><th style="width:15%">Layer</th><th style="width:43%">Coverage for this incident</th><th>Why here and not elsewhere</th></tr>
+  <tr><td>Unit (dev)</td><td>React Native form state clears section values on uncheck (BUG-002 root cause, shared by iOS and Android)</td><td>Cheapest and fastest; pure state logic needs no device or emulator</td></tr>
+  <tr><td><b>API / contract</b></td><td>PATCH <code>hasDetails:false</code> → <code>details:null</code>, old image URLs <b>404</b>, re-enable starts empty, upload to disabled section <b>409</b>, required reference code 400</td><td>BUG-001 has <b>no UI symptom</b>. The API is the first layer where it shows. Runs in ms, no flakiness</td></tr>
+  <tr><td><b>Data (SQL)</b></td><td>0 rows in <code>stored_images</code> for the section, section columns <code>NULL</code>, cascade on form delete</td><td>An API response can hide orphans (filtered by the flag). Only storage/DB proves they are gone</td></tr>
+  <tr><td>Integration</td><td>Storage failure during save is reported to the user (mocked 500)</td><td>The failure mode lives between services. A mock makes it deterministic</td></tr>
+  <tr><td><b>UI E2E</b> (few)</td><td>Full journey: upload → edit → uncheck → save → URL 404 → re-enable + save shows no old image. BUG-002: request payload has <code>details:null</code> + “Saved”, no error. Edit draft: untick → re-tick <i>before</i> save restores fields and images; untick → save drops the draft from client state and backend. Cancel keeps images</td><td>Only the UI proves what the <i>user</i> sees. Kept to 6 tests so regression does not grow back to hours. The real client was React Native (Appium/WDIO); the stand-in is a web form so the same flows run in Playwright</td></tr>
+  <tr><td>Manual charter</td><td>30 min: <i>explore dependent-data lifecycle</i>: toggle many times, two devices editing, app killed or offline during save, permission change, export/report containing old data</td><td>Cases with low repeat value, used to find more spec gaps</td></tr>
+</table>
+<p><span class="k">Risk-based scope:</span> <b>High</b>: deleted images still reachable (privacy, data retention). <b>Medium</b>: user blocked by an invisible validation error. <b>Low</b>: storage growth. <b>Out of scope</b>: bulk-cleanup performance, full device matrix for upload (one smoke run per OS).
+<span class="k">Test data:</span> data arranged through the API; unique titles per worker and test; a fresh DB file per run, so no shared reset and <code>fullyParallel</code> is safe; SQL is read-only; a 1×1 PNG fixture; no real customer images.
+<span class="k">CI:</span> GitHub Actions matrix <i>fixed / BUG-001 / BUG-002</i>. Each original bug can be switched back on in the stub, and the jobs prove the tagged tests fail against it. Then: Jenkins + Fastlane on every build.</p>
+
+
+<h2>3. Real defect from the incident</h2>
+<table>
+  <tr><th style="width:17%">BUG-001</th><td><b>Images of “Additional details” remain in storage and are reachable by URL after the section is disabled</b></td></tr>
+  <tr><th>Env / Severity</th><td>Test &amp; pre-prod, React Native app on <b>iOS and Android</b> (reproduced on both). <b>Major</b> (data retention / privacy, silent; no UI symptom), Priority Medium</td></tr>
+  <tr><th>Steps</th><td>1) Create a form, tick “Add additional details”, fill the fields, upload an image, Save. 2) Copy the image URL from the traffic (proxy). 3) Edit → untick → Save. 4) Open the copied URL. 5) Tick the box again, fill the section, Save.</td></tr>
+  <tr><th>Expected</th><td>After 3) the section fields and images are deleted. 4) returns 404. 5) shows only the new data, no old images.</td></tr>
+  <tr><th>Actual</th><td>4) <b>200, image served</b>. Images and section values still stored; 5) the <b>old images come back</b> in the section.</td></tr>
+  <tr><th>Evidence</th><td>Then: proxy log with 200 for the image after save; API response; storage record. Reproduced on the stand-in: <code>docs/evidence/bug-001-*.png</code>, <code>bug-002-*.png</code></td></tr>
+  <tr><th>Linked</th><td><b>BUG-002</b> (Medium): hidden section values were sent on save after unticking, causing a validation error on an invisible field</td></tr>
+</table>
+
+<div class="grid">
+<div>
+<h2>4. API / data</h2>
+<p><b>REST</b>: <code>POST/GET/PATCH/DELETE /api/forms/:id</code>, <code>POST /api/forms/:id/images</code>, <code>GET /images/:id</code>. Checked: status codes, <code>details</code> null/empty, image URL reachability, validation error field.</p>
+<p><b>SQL</b> (data mattered, because orphans are invisible to the UI):</p>
+<p class="mono">SELECT COUNT(*) FROM stored_images<br>&nbsp;WHERE form_id = :id AND section = 'details'; -- 0<br>SELECT has_details, reference_code, details_note<br>&nbsp;FROM forms WHERE id = :id; -- 0, NULL, NULL</p>
+<p>On the real project the check was a <code>GET</code> request to the image URL: after the section was disabled it still returned the image (200).</p>
+</div>
+<div>
+<h2>5. Agile: question for PO / Eng</h2>
+<p>“When a user disables an optional section, should its data be <b>hard-deleted on save</b>, <b>soft-deleted</b> with an undo/audit retention period, or <b>kept</b> hidden? Does the answer change if the images were already exported or shared?”</p>
+<p>The spec was silent, and the answer decides the <i>expected result</i> of every test above (404 vs. 403 vs. 200 for an admin), so I would not automate further until it is answered. The one rule I would propose upfront: before save, disabling is <b>reversible</b> (re-ticking restores the draft, Cancel keeps everything); only <b>Save</b> deletes the data.</p>
+</div>
+</div>
+
+<h2>6. Tools &amp; methods: then vs now</h2>
+<table>
+  <tr><th style="width:17%"></th><th>Then (2023–2024, real project)</th><th>Now (this take-home)</th></tr>
+  <tr><td>Find / reproduce</td><td>Manual exploratory testing on iOS and Android devices, app traffic through a proxy, direct URL checks</td><td>Stand-in app (Node + <code>node:sqlite</code>), bugs switchable via <code>BUGS=</code>; explored with <code>playwright-cli</code> (agent skill)</td></tr>
+  <tr><td>Automation</td><td>TypeScript, Appium, WebdriverIO, Jest; Allure reports</td><td>Playwright 1.65 + TS, layers <code>api/ db/ ui/ common/</code>: Page Objects, action steps + <code>*.verification.steps</code> (<code>test.step</code>, <code>expect.soft</code> for independent checks), fixtures base→db→api→ui; 5 API/SQL + 6 UI tests, <code>page.route</code> mock</td></tr>
+  <tr><td>CI / tracking</td><td>Jenkins, Fastlane, AWS, Jira, Confluence</td><td>GitHub Actions: typecheck, ESLint, Prettier, then matrix fixed / BUG-001 / BUG-002; HTML report</td></tr>
+  <tr><td>AI</td><td>none</td><td>Claude Code + Playwright CLI skill (see §4)</td></tr>
+</table>
+
+<h2>§4 AI, Part A: while completing this take-home</h2>
+<p><span class="k">Tools:</span> Claude Code (Claude Opus 5.5) in the terminal for the plan, stub, tests, CI, README and this PDF draft; the <b><code>playwright-cli</code> skill</b> to drive the running app. I ran and reviewed every step. <span class="k">Workflow:</span> my review rules are saved in <b>Claude Code project memory</b> (braces on every <code>if</code>, camelCase maps, <code>api/ db/ ui/ common/</code> layout, no magic values), so a correction sticks across sessions, and ESLint enforces them where it can. AI work counted as done only after <b>typecheck + ESLint + Prettier + the suite in all 3 modes</b> (fixed / BUG-001 / BUG-002).</p>
+<p><span class="k">Prompts</span> (condensed from the session): <b>(1) Context + constraints, plan first.</b> “Context: my CV, the brief and the real incident (checkbox section with fields and images; after unticking on edit the backend kept the images). Constraints: anonymize as Product A; role, dates and stack must match my CV; no customer data. Deliverables: Playwright API + SQL + UI suite, README, ≤2-page PDF. Give a plan with test layers and edge cases first, no code.” → layers and edge cases (cancel, re-enable “resurrection”); accepted. <b>(2) Trade-off with a criterion.</b> “The real React Native app is not available. Compare a stub, network mocks and a public sandbox by one criterion: can each test be <i>seen failing</i> on the original bug? Recommend one.” → a stub with <code>BUGS=</code> switches and the <code>bugGuard</code> fixture. <b>(3) Adversarial review.</b> “Use the <code>playwright-cli</code> skill to drive the running app on each buggy build, reproduce both bugs live and find tests that stay green on a buggy build.” → the UI test’s last step (re-tick → empty) <b>passed on the buggy build</b>, because images only come back <i>after save</i>; fixed. <b>(4) Domain correction.</b> “In edit, untick → re-tick restores fields and images from a temporary draft; only Save deletes. Check the stub and tests against this, fix the model, and prove every new test fails on the behaviour it guards.” → AI had fixed BUG-002 by wiping the section on untick; the fix moved to save, plus two UI tests (re-tick restores the draft; untick → save clears client and backend). Both were <b>seen failing</b>: against the old wipe-on-untick code (mutation) and on BUG-002.</p>
+<p><span class="k">Rejected / changed by me:</span> the public sandbox (it cannot reproduce my bug); AI’s code style (one-line <code>if</code>, <code>UPPER_CASE</code> maps like <code>API_ROUTES.FORM(id)</code>) and its single-folder layout; I also rejected a later “flattened” version as too primitive. In code review I moved SQL out of the API steps into its own <code>db/</code> layer, split actions from verifications, and swapped a format check for a plain “required” rule that shows BUG-002 more clearly. Details I did not remember exactly (fix, severity) are reconstructed from memory.</p>
+
+<h2>§4 AI, Part B: the original incident with today’s workflow</h2>
+<p><span class="k">Delegate:</span> a state-transition matrix from the story (toggle × save/cancel × create/edit/delete/re-enable) to find missing acceptance criteria; API client and fixture boilerplate; a SQL query for orphaned rows; triage of <i>anonymized</i> storage logs; first drafts of bug reports from my notes. <span class="k">Never without human verification:</span> the expected behaviour (a business and privacy decision that belongs to the PO), severity, final assertions, and anything with customer data. Prompts get synthetic fixtures only: no real images, URLs or IDs.</p>
+<p><span class="k">Speed / coverage / triage:</span> then, I found BUG-001 by hand during edit testing, after the feature was built. With the matrix in refinement, the question “what happens to the data on uncheck?” would have come up <b>before the code was written</b> (shift-left), and the API and SQL checks would have been ready the same day, not added after the bug.</p>
+<p><span class="k">Risk:</span> AI writes tests from the <i>implementation</i>, so it treats the bug as correct behaviour (for example, asserting the images are still returned because the API returns them). <span class="k">Mitigation:</span> expected results come only from criteria agreed with the PO, and every new test must be <b>seen failing against the buggy build</b> (the <code>BUGS=</code> switch / mutation) before it is merged.</p>
+<p><span class="k">PDF ↔ code:</span> <code>e2e/api/tests/details-cleanup.spec.ts</code>, <code>e2e/ui/tests/details-section.spec.ts</code>; test titles carry the bug IDs (<code>BUG-001: …</code>, <code>BUG-002: …</code>) and tags <code>@bug-001</code>/<code>@bug-002</code>. Assertions match §3: old URL → 404, <code>stored_images</code> = 0, payload <code>details:null</code>.</p>
+
+</body>
+</html>

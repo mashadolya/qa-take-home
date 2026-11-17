@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Product A — Form editor (stub)</title>
+    <style>
+      body {
+        font:
+          15px/1.4 system-ui,
+          sans-serif;
+        max-width: 640px;
+        margin: 32px auto;
+        padding: 0 16px;
+      }
+      fieldset {
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        margin: 16px 0;
+      }
+      label {
+        display: block;
+        margin: 8px 0 4px;
+      }
+      input[type='text'],
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        margin-top: 16px;
+      }
+      .gallery img {
+        width: 64px;
+        height: 64px;
+        object-fit: cover;
+        margin: 4px;
+        border: 1px solid #ddd;
+      }
+      [role='alert'] {
+        color: #b00020;
+      }
+      [role='status'] {
+        color: #1b5e20;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 id="heading">New form</h1>
+
+    <form id="editor" novalidate>
+      <label for="title">Title</label>
+      <input id="title" type="text" data-testid="title" />
+
+      <label
+        ><input id="hasDetails" type="checkbox" data-testid="has-details" /> Add additional
+        details</label
+      >
+
+      <fieldset id="details" data-testid="details-section" hidden>
+        <legend>Additional details</legend>
+        <label for="referenceCode">Reference code</label>
+        <input
+          id="referenceCode"
+          type="text"
+          placeholder="e.g. REF-1001"
+          data-testid="reference-code"
+        />
+        <label for="note">Note</label>
+        <textarea id="note" data-testid="note"></textarea>
+        <label for="images">Images</label>
+        <input
+          id="images"
+          type="file"
+          accept="image/png,image/jpeg"
+          multiple
+          data-testid="images-input"
+        />
+        <div class="gallery" data-testid="gallery"></div>
+      </fieldset>
+
+      <div class="row">
+        <button type="submit" data-testid="save">Save</button>
+        <button type="button" id="cancel" data-testid="cancel" hidden>Cancel</button>
+      </div>
+      <p id="error" role="alert" data-testid="error"></p>
+      <p id="status" role="status" data-testid="status"></p>
+    </form>
+
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+      const { bugs } = await (await fetch('/api/config')).json();
+      const isBug002Enabled = bugs.includes('BUG-002');
+
+      const formId = new URLSearchParams(location.search).get('id');
+      let pendingFiles = [];
+
+      const setDetailsVisible = (on) => {
+        $('details').hidden = !on;
+      };
+
+      const renderGallery = (images) => {
+        const gallery = document.querySelector('[data-testid=gallery]');
+        gallery.replaceChildren(
+          ...images.map((img) => {
+            const el = document.createElement('img');
+            el.src = img.url;
+            el.alt = 'Detail image';
+            el.dataset.testid = 'detail-image';
+            return el;
+          }),
+        );
+      };
+
+      const clearDetailsState = () => {
+        $('referenceCode').value = '';
+        $('note').value = '';
+        $('images').value = '';
+        pendingFiles = [];
+        renderGallery([]);
+      };
+
+      const load = async () => {
+        if (!formId) {
+          return;
+        }
+        $('heading').textContent = 'Edit form';
+        $('cancel').hidden = false;
+        const form = await (await fetch(`/api/forms/${formId}`)).json();
+        $('title').value = form.title;
+        $('hasDetails').checked = form.hasDetails;
+        setDetailsVisible(form.hasDetails);
+        clearDetailsState();
+        if (form.details) {
+          $('referenceCode').value = form.details.referenceCode ?? '';
+          $('note').value = form.details.note ?? '';
+          renderGallery(form.details.images);
+        }
+      };
+
+      // Unticking only hides the section: its values and attached images stay in the edit draft,
+      // so re-ticking before save brings them back. The draft is dropped on save or cancel (load()).
+      // The BUG-002 fix is in submit: a hidden section is never sent.
+      $('hasDetails').addEventListener('change', (e) => {
+        setDetailsVisible(e.target.checked);
+      });
+
+      $('images').addEventListener('change', (e) => {
+        pendingFiles = [...e.target.files];
+      });
+
+      $('cancel').addEventListener('click', async () => {
+        $('error').textContent = '';
+        $('status').textContent = '';
+        await load();
+      });
+
+      const toBase64 = (file) =>
+        new Promise((resolve) => {
+          const r = new FileReader();
+          r.onload = () => resolve(String(r.result).split(',')[1]);
+          r.readAsDataURL(file);
+        });
+
+      $('editor').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        $('error').textContent = '';
+        $('status').textContent = '';
+
+        const hasDetails = $('hasDetails').checked;
+        const detailsFilled = $('referenceCode').value || $('note').value;
+        const payload = { title: $('title').value, hasDetails, details: null };
+        if (hasDetails || (isBug002Enabled && detailsFilled)) {
+          // BUG-002: with the bug on, hidden section values are still sent after the box is unchecked
+          payload.details = { referenceCode: $('referenceCode').value, note: $('note').value };
+        }
+
+        const res = await fetch(formId ? `/api/forms/${formId}` : '/api/forms', {
+          method: formId ? 'PATCH' : 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const body = await res.json();
+        if (!res.ok) {
+          $('error').textContent = (body.errors ?? [{ message: body.error }])
+            .map((x) => x.message)
+            .join('; ');
+          return;
+        }
+
+        if (hasDetails) {
+          for (const file of pendingFiles) {
+            const up = await fetch(`/api/forms/${body.id}/images`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ mime: file.type, base64: await toBase64(file) }),
+            });
+            if (!up.ok) {
+              $('error').textContent =
+                `Form saved, but image "${file.name}" failed to upload. Please retry.`;
+              return;
+            }
+          }
+        }
+
+        if (!formId) {
+          location.href = `/?id=${body.id}&saved=1`;
+          return;
+        }
+        await load();
+        $('status').textContent = 'Saved';
+      });
+
+      await load();
+      if (new URLSearchParams(location.search).get('saved')) {
+        $('status').textContent = 'Saved';
+      }
+      document.body.dataset.ready = 'true';
+    </script>
+  </body>
+</html>

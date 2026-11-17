@@ -1,0 +1,33 @@
+{
+  "name": "product-a-details-section",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Appfire take-home: Product A stand-in (src/) + Playwright API/E2E suite (e2e/) for BUG-001/BUG-002",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "e2e": "playwright test",
+    "e2e:api": "playwright test --project=api",
+    "e2e:ui": "playwright test --project=ui",
+    "e2e:bug-001": "BUGS=BUG-001 playwright test",
+    "e2e:bug-002": "BUGS=BUG-002 playwright test",
+    "e2e:headed": "playwright test --project=ui --headed",
+    "e2e:report": "playwright show-report",
+    "e2e:typecheck": "tsc -p e2e",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@types/node": "^22",
+    "eslint": "^10.14.0",
+    "prettier": "^3.9.10",
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.72.1"
+  }
+}

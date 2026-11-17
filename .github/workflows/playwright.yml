@@ -1,0 +1,37 @@
+name: playwright
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: tests (${{ matrix.bugs || 'fixed build' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # '' = fixed product. BUG-00x = the original defect switched back on in the stub:
+        # tests tagged with that bug are marked expected-to-fail, so a green job proves they catch it.
+        bugs: ['', 'BUG-001', 'BUG-002']
+    env:
+      BUGS: ${{ matrix.bugs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run e2e:typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report-${{ matrix.bugs || 'fixed' }}
+          path: playwright-report/
+          retention-days: 7
